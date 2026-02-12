@@ -60,7 +60,7 @@ git push -u origin main
 
 1. Visit your Netlify URL
 2. Paste your M3U8 stream URL
-3. (Optional) Add subtitle URL
+3. (Optional) Upload a .vtt subtitle file
 4. Click "Start Party"
 5. Share the room link with friends!
 
@@ -93,7 +93,7 @@ Netlify will automatically rebuild and deploy!
 
 - **Test locally**: Open `index.html` in your browser before deploying
 - **Get M3U8 URLs**: Many video hosting platforms provide M3U8 streams
-- **Subtitles**: Use WebVTT (.vtt) format for subtitles
+- **Subtitles**: Upload WebVTT (.vtt) files - they'll be shared with all viewers automatically
 - **Mobile**: Works great on phones and tablets too!
 - **Performance**: Netlify's CDN makes your site super fast worldwide
 

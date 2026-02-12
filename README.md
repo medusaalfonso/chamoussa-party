@@ -7,7 +7,7 @@ A beautiful, real-time watch party platform where you can watch M3U8 streams tog
 - 🎬 **M3U8 Stream Support**: Watch any HLS stream together
 - 🔄 **Real-time Sync**: Automatic playback synchronization across all viewers
 - 💬 **Live Chat**: Chat with friends while watching
-- 📝 **Subtitle Support**: Add and sync subtitles (.vtt format)
+- 📝 **Subtitle Support**: Upload and sync .vtt subtitle files for everyone
 - 🎨 **Beautiful Dark Mode UI**: Modern, sleek interface
 - 📱 **Responsive Design**: Works on desktop, tablet, and mobile
 - 🔗 **Easy Sharing**: Share room links with friends
@@ -36,7 +36,7 @@ A beautiful, real-time watch party platform where you can watch M3U8 streams tog
 
 1. Visit your deployed site
 2. Paste your **M3U8 stream URL** (e.g., `https://example.com/stream.m3u8`)
-3. Optionally add a **subtitle URL** (.vtt format)
+3. Optionally **upload a subtitle file** (.vtt format)
 4. Click **"Start Party"**
 5. Share the **room link** with friends!
 
@@ -113,9 +113,9 @@ You can use M3U8 streams from:
 - Refresh the page and rejoin the room
 
 ### Subtitles not showing
-- Ensure the subtitle URL is accessible
-- Subtitles must be in .vtt (WebVTT) format
+- Ensure you uploaded a valid .vtt (WebVTT) file
 - Click the subtitle button to toggle them on
+- Check browser console for any subtitle loading errors
 
 ## 🤝 Contributing
 

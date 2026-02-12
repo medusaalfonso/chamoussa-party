@@ -52,13 +52,21 @@
                         </div>
 
                         <div class="input-group">
-                            <label for="subtitleInput">Subtitle URL (Optional)</label>
+                            <label for="subtitleInput">Subtitle File (Optional)</label>
                             <input 
-                                type="text" 
+                                type="file" 
                                 id="subtitleInput" 
-                                placeholder="https://example.com/subtitles.vtt"
-                                class="input-field"
+                                accept=".vtt"
+                                class="file-input"
                             />
+                            <div class="file-input-label" id="subtitleLabel">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                <span>Choose VTT file or drag here</span>
+                            </div>
                         </div>
 
                         <button id="startButton" class="primary-button">

@@ -3,11 +3,14 @@ let state = {
     roomId: null,
     username: null,
     videoUrl: null,
-    subtitleUrl: null,
+    subtitleFile: null,
+    subtitleData: null,
     hls: null,
     isHost: false,
     syncInterval: null,
-    viewers: 1
+    messageCheckInterval: null,
+    viewers: 1,
+    lastSyncTime: 0
 };
 
 // Generate random room ID
@@ -25,17 +28,24 @@ function generateUsername() {
 // Storage helper using Claude's persistent storage
 async function saveToStorage(key, value) {
     try {
-        await window.storage.set(key, JSON.stringify(value), true);
+        const result = await window.storage.set(key, JSON.stringify(value), true);
+        console.log('Saved to storage:', key, result ? 'success' : 'failed');
+        return result !== null;
     } catch (error) {
         console.error('Storage save error:', error);
+        return false;
     }
 }
 
 async function getFromStorage(key) {
     try {
         const result = await window.storage.get(key, true);
-        return result ? JSON.parse(result.value) : null;
+        if (result && result.value) {
+            return JSON.parse(result.value);
+        }
+        return null;
     } catch (error) {
+        console.log('Storage get error (key may not exist):', key);
         return null;
     }
 }
@@ -58,11 +68,63 @@ function setupEventListeners() {
     document.getElementById('subtitleToggle').addEventListener('click', toggleSubtitles);
     document.getElementById('shareButton').addEventListener('click', shareRoom);
     
+    // File input handlers
+    const subtitleInput = document.getElementById('subtitleInput');
+    const subtitleLabel = document.getElementById('subtitleLabel');
+    
+    subtitleInput.addEventListener('change', handleSubtitleFileSelect);
+    
+    // Drag and drop for subtitle file
+    subtitleLabel.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        subtitleLabel.style.borderColor = 'var(--accent-primary)';
+    });
+    
+    subtitleLabel.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        subtitleLabel.style.borderColor = 'var(--border-color)';
+    });
+    
+    subtitleLabel.addEventListener('drop', (e) => {
+        e.preventDefault();
+        subtitleLabel.style.borderColor = 'var(--border-color)';
+        const files = e.dataTransfer.files;
+        if (files.length > 0 && files[0].name.endsWith('.vtt')) {
+            subtitleInput.files = files;
+            handleSubtitleFileSelect({ target: subtitleInput });
+        }
+    });
+    
+    subtitleLabel.addEventListener('click', () => {
+        subtitleInput.click();
+    });
+    
     // Video event listeners
     const video = document.getElementById('videoPlayer');
     video.addEventListener('play', handleVideoPlay);
     video.addEventListener('pause', handleVideoPause);
     video.addEventListener('seeked', handleVideoSeek);
+}
+
+// Handle subtitle file selection
+function handleSubtitleFileSelect(event) {
+    const file = event.target.files[0];
+    const label = document.getElementById('subtitleLabel');
+    
+    if (file && file.name.endsWith('.vtt')) {
+        state.subtitleFile = file;
+        label.classList.add('has-file');
+        label.querySelector('span').textContent = file.name;
+        
+        // Read file content
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            state.subtitleData = e.target.result;
+        };
+        reader.readAsText(file);
+    } else {
+        alert('Please select a valid .vtt file');
+    }
 }
 
 // Start a new party
@@ -76,20 +138,35 @@ async function startParty() {
     
     state.roomId = generateRoomId();
     state.videoUrl = m3u8Input;
-    state.subtitleUrl = document.getElementById('subtitleInput').value.trim();
     state.isHost = true;
     
-    // Save room data
+    // Save room data including subtitle content
     const roomData = {
         videoUrl: state.videoUrl,
-        subtitleUrl: state.subtitleUrl,
+        subtitleData: state.subtitleData || null,
         currentTime: 0,
         isPlaying: false,
         createdAt: Date.now(),
-        viewers: []
+        lastUpdate: Date.now(),
+        hostUsername: state.username,
+        viewers: [state.username]
     };
     
-    await saveToStorage(`room:${state.roomId}`, roomData);
+    const saved = await saveToStorage(`room:${state.roomId}`, roomData);
+    
+    if (!saved) {
+        alert('Error creating room. Please try again.');
+        return;
+    }
+    
+    console.log('Room created:', state.roomId, roomData);
+    
+    // Add initial welcome message
+    await saveToStorage(`messages:${state.roomId}`, [{
+        username: 'System',
+        text: `${state.username} created the room`,
+        timestamp: Date.now()
+    }]);
     
     initializeRoom();
 }
@@ -103,17 +180,41 @@ async function joinRoom() {
         return;
     }
     
+    console.log('Attempting to join room:', roomId);
+    
     const roomData = await getFromStorage(`room:${roomId}`);
     
+    console.log('Room data retrieved:', roomData);
+    
     if (!roomData) {
-        alert('Room not found');
+        alert('Room not found. Please check the room ID and try again.');
         return;
     }
     
     state.roomId = roomId;
     state.videoUrl = roomData.videoUrl;
-    state.subtitleUrl = roomData.subtitleUrl;
+    state.subtitleData = roomData.subtitleData;
     state.isHost = false;
+    
+    // Add viewer to room
+    if (!roomData.viewers) {
+        roomData.viewers = [];
+    }
+    if (!roomData.viewers.includes(state.username)) {
+        roomData.viewers.push(state.username);
+        await saveToStorage(`room:${roomId}`, roomData);
+    }
+    
+    // Add join message
+    const messages = await getFromStorage(`messages:${state.roomId}`) || [];
+    messages.push({
+        username: 'System',
+        text: `${state.username} joined the room`,
+        timestamp: Date.now()
+    });
+    await saveToStorage(`messages:${state.roomId}`, messages);
+    
+    console.log('Successfully joined room:', roomId);
     
     initializeRoom();
 }
@@ -132,8 +233,8 @@ function initializeRoom() {
     // Setup video
     setupVideoPlayer();
     
-    // Show subtitle button if subtitle URL exists
-    if (state.subtitleUrl) {
+    // Show subtitle button if subtitle data exists
+    if (state.subtitleData) {
         document.getElementById('subtitleToggle').classList.remove('hidden');
     }
     
@@ -141,8 +242,31 @@ function initializeRoom() {
     addSystemMessage(`Welcome to room ${state.roomId}!`);
     addSystemMessage(`You joined as ${state.username}`);
     
+    // Load existing messages
+    loadExistingMessages();
+    
     // Start syncing
     startSync();
+    startMessageSync();
+    
+    console.log('Room initialized:', state.roomId, 'isHost:', state.isHost);
+}
+
+// Load existing messages when joining
+async function loadExistingMessages() {
+    const messagesKey = `messages:${state.roomId}`;
+    const messages = await getFromStorage(messagesKey) || [];
+    
+    messages.forEach(msg => {
+        if (msg.username === 'System') {
+            addSystemMessage(msg.text);
+        } else {
+            displayMessage(msg);
+        }
+    });
+    
+    const chatMessages = document.getElementById('chatMessages');
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 // Setup HLS video player
@@ -160,7 +284,7 @@ function setupVideoPlayer() {
         
         state.hls.on(Hls.Events.MANIFEST_PARSED, () => {
             console.log('Stream loaded successfully');
-            if (state.subtitleUrl) {
+            if (state.subtitleData) {
                 addSubtitles();
             }
         });
@@ -174,7 +298,7 @@ function setupVideoPlayer() {
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS support (Safari)
         video.src = state.videoUrl;
-        if (state.subtitleUrl) {
+        if (state.subtitleData) {
             addSubtitles();
         }
     } else {
@@ -182,14 +306,19 @@ function setupVideoPlayer() {
     }
 }
 
-// Add subtitles
+// Add subtitles from uploaded file data
 function addSubtitles() {
     const video = document.getElementById('videoPlayer');
+    
+    // Create a blob from the subtitle data
+    const blob = new Blob([state.subtitleData], { type: 'text/vtt' });
+    const url = URL.createObjectURL(blob);
+    
     const track = document.createElement('track');
     track.kind = 'subtitles';
     track.label = 'Subtitles';
     track.srclang = 'en';
-    track.src = state.subtitleUrl;
+    track.src = url;
     track.default = true;
     video.appendChild(track);
 }
@@ -233,64 +362,102 @@ async function handleVideoSeek() {
 
 // Update room state
 async function updateRoomState(updates) {
-    const roomData = await getFromStorage(`room:${state.roomId}`) || {};
+    const roomData = await getFromStorage(`room:${state.roomId}`);
+    if (!roomData) {
+        console.error('Room not found when updating state');
+        return;
+    }
+    
     Object.assign(roomData, updates);
-    await saveToStorage(`room:${state.roomId}`, roomData);
+    roomData.lastUpdate = Date.now();
+    
+    const saved = await saveToStorage(`room:${state.roomId}`, roomData);
+    console.log('Room state updated:', updates, 'Success:', saved);
 }
 
 // Sync with room
 async function syncWithRoom() {
     const roomData = await getFromStorage(`room:${state.roomId}`);
     
-    if (!roomData) return;
+    if (!roomData) {
+        console.error('Room not found');
+        addSystemMessage('Error: Room not found');
+        return;
+    }
     
     const video = document.getElementById('videoPlayer');
     
     // Sync time
-    if (Math.abs(video.currentTime - roomData.currentTime) > 2) {
-        video.currentTime = roomData.currentTime;
+    const timeDiff = Math.abs(video.currentTime - (roomData.currentTime || 0));
+    if (timeDiff > 2) {
+        video.currentTime = roomData.currentTime || 0;
+        console.log('Synced time to:', roomData.currentTime);
     }
     
     // Sync play state
     if (roomData.isPlaying && video.paused) {
-        video.play().catch(e => console.log('Autoplay prevented'));
+        video.play().catch(e => console.log('Autoplay prevented:', e));
     } else if (!roomData.isPlaying && !video.paused) {
         video.pause();
     }
     
-    addSystemMessage('Synced with room');
+    addSystemMessage('✓ Synced with room');
 }
 
 // Start periodic sync
 function startSync() {
-    // Sync every 3 seconds
+    // Clear any existing interval
+    if (state.syncInterval) {
+        clearInterval(state.syncInterval);
+    }
+    
+    // Sync every 2 seconds
     state.syncInterval = setInterval(async () => {
-        if (!state.isHost) {
-            const roomData = await getFromStorage(`room:${state.roomId}`);
-            if (roomData) {
-                const video = document.getElementById('videoPlayer');
-                
-                // Auto-sync if difference is more than 3 seconds
-                if (Math.abs(video.currentTime - roomData.currentTime) > 3) {
-                    video.currentTime = roomData.currentTime;
+        try {
+            if (!state.isHost) {
+                // Viewers sync from room
+                const roomData = await getFromStorage(`room:${state.roomId}`);
+                if (roomData) {
+                    const video = document.getElementById('videoPlayer');
+                    
+                    // Auto-sync if difference is more than 3 seconds
+                    const timeDiff = Math.abs(video.currentTime - (roomData.currentTime || 0));
+                    if (timeDiff > 3) {
+                        video.currentTime = roomData.currentTime || 0;
+                        console.log('Auto-synced time');
+                    }
+                    
+                    // Sync play state
+                    if (roomData.isPlaying && video.paused) {
+                        video.play().catch(() => {});
+                    } else if (!roomData.isPlaying && !video.paused) {
+                        video.pause();
+                    }
+                    
+                    // Update viewer count
+                    const viewerCount = (roomData.viewers || []).length;
+                    document.getElementById('viewerCount').textContent = `👥 ${viewerCount}`;
                 }
+            } else {
+                // Host updates current time
+                const video = document.getElementById('videoPlayer');
+                const now = Date.now();
                 
-                // Sync play state
-                if (roomData.isPlaying && video.paused) {
-                    video.play().catch(() => {});
-                } else if (!roomData.isPlaying && !video.paused) {
-                    video.pause();
+                // Only update every 2 seconds to reduce storage calls
+                if (now - state.lastSyncTime > 2000) {
+                    await updateRoomState({ 
+                        currentTime: video.currentTime,
+                        isPlaying: !video.paused 
+                    });
+                    state.lastSyncTime = now;
                 }
             }
-        } else {
-            // Host updates current time
-            const video = document.getElementById('videoPlayer');
-            await updateRoomState({ 
-                currentTime: video.currentTime,
-                isPlaying: !video.paused 
-            });
+        } catch (error) {
+            console.error('Sync error:', error);
         }
-    }, 3000);
+    }, 2000);
+    
+    console.log('Sync started');
 }
 
 // Chat functions
@@ -306,26 +473,36 @@ async function sendMessage() {
         timestamp: Date.now()
     };
     
-    // Save to storage
-    const messagesKey = `messages:${state.roomId}`;
-    const messages = await getFromStorage(messagesKey) || [];
-    messages.push(chatMessage);
-    
-    // Keep only last 100 messages
-    if (messages.length > 100) {
-        messages.shift();
+    try {
+        // Save to storage
+        const messagesKey = `messages:${state.roomId}`;
+        const messages = await getFromStorage(messagesKey) || [];
+        messages.push(chatMessage);
+        
+        // Keep only last 100 messages
+        if (messages.length > 100) {
+            messages.shift();
+        }
+        
+        const saved = await saveToStorage(messagesKey, messages);
+        
+        if (saved) {
+            // Display message locally immediately
+            displayMessage(chatMessage);
+            
+            input.value = '';
+            
+            // Scroll to bottom
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        } else {
+            console.error('Failed to save message');
+            alert('Failed to send message. Please try again.');
+        }
+    } catch (error) {
+        console.error('Send message error:', error);
+        alert('Error sending message');
     }
-    
-    await saveToStorage(messagesKey, messages);
-    
-    // Display message
-    displayMessage(chatMessage);
-    
-    input.value = '';
-    
-    // Scroll to bottom
-    const chatMessages = document.getElementById('chatMessages');
-    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 function displayMessage(message) {
@@ -391,19 +568,32 @@ function loadRoomFromURL() {
 }
 
 // Load messages periodically
-setInterval(async () => {
-    if (!state.roomId) return;
-    
-    const messagesKey = `messages:${state.roomId}`;
-    const messages = await getFromStorage(messagesKey) || [];
-    const chatMessages = document.getElementById('chatMessages');
-    const currentCount = chatMessages.querySelectorAll('.message').length;
-    
-    if (messages.length > currentCount) {
-        // Display new messages
-        for (let i = currentCount; i < messages.length; i++) {
-            displayMessage(messages[i]);
-        }
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+function startMessageSync() {
+    // Clear any existing interval
+    if (state.messageCheckInterval) {
+        clearInterval(state.messageCheckInterval);
     }
-}, 2000);
+    
+    state.messageCheckInterval = setInterval(async () => {
+        if (!state.roomId) return;
+        
+        try {
+            const messagesKey = `messages:${state.roomId}`;
+            const messages = await getFromStorage(messagesKey) || [];
+            const chatMessages = document.getElementById('chatMessages');
+            const currentCount = chatMessages.querySelectorAll('.message').length;
+            
+            if (messages.length > currentCount) {
+                // Display new messages
+                for (let i = currentCount; i < messages.length; i++) {
+                    displayMessage(messages[i]);
+                }
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        } catch (error) {
+            console.error('Message sync error:', error);
+        }
+    }, 1500);
+    
+    console.log('Message sync started');
+}

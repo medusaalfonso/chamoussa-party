@@ -162,6 +162,44 @@ body {
     color: #4a4a5e;
 }
 
+.file-input {
+    display: none;
+}
+
+.file-input-label {
+    width: 100%;
+    padding: 1.5rem 1rem;
+    background: var(--bg-tertiary);
+    border: 2px dashed var(--border-color);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    transition: all 0.2s;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    text-align: center;
+}
+
+.file-input-label:hover {
+    border-color: var(--accent-primary);
+    background: var(--hover-overlay);
+    color: var(--text-primary);
+}
+
+.file-input-label.has-file {
+    border-color: var(--success);
+    border-style: solid;
+    color: var(--success);
+}
+
+.file-input-label svg {
+    flex-shrink: 0;
+}
+
+
 .primary-button {
     width: 100%;
     padding: 1rem;
