@@ -11,7 +11,8 @@ let state = {
     messageCheckInterval: null,
     viewers: 1,
     lastSyncTime: 0,
-    lastMessageCount: 0
+    lastMessageCount: 0,
+    displayedMessageIds: new Set() // Track displayed messages to prevent duplicates
 };
 
 // Upstash Redis Configuration
@@ -323,7 +324,8 @@ async function startParty() {
     const welcomeMessage = {
         username: 'System',
         text: `${state.username} created the room`,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        id: `system-create-${state.roomId}-${Date.now()}`
     };
     
     const messagesKey = `messages:${state.roomId}`;
@@ -376,7 +378,8 @@ async function joinRoom() {
     const joinMessage = {
         username: 'System',
         text: `${state.username} joined the room`,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        id: `system-join-${state.roomId}-${state.username}-${Date.now()}`
     };
     
     const messagesKey = `messages:${state.roomId}`;
@@ -439,6 +442,11 @@ async function loadExistingMessages() {
     }
     
     messages.forEach(msg => {
+        // Add ID to message if it doesn't have one
+        if (!msg.id) {
+            msg.id = `${msg.username}-${msg.timestamp}`;
+        }
+        
         if (msg.username === 'System') {
             addSystemMessage(msg.text);
         } else {
@@ -654,7 +662,8 @@ async function sendMessage() {
     const chatMessage = {
         username: state.username,
         text: message,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        id: `${state.username}-${Date.now()}-${Math.random()}` // Unique ID
     };
     
     try {
@@ -674,14 +683,17 @@ async function sendMessage() {
             await saveToStorage(messagesKey, messages);
         }
         
-        // Display message locally immediately
-        displayMessage(chatMessage);
-        
+        // Clear input
         input.value = '';
         
-        // Scroll to bottom
-        const chatMessages = document.getElementById('chatMessages');
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        // Trigger immediate sync for faster display
+        if (!isUpstashConfigured) {
+            // Force immediate display for localStorage since it's instant
+            setTimeout(() => {
+                triggerMessageSync();
+            }, 100);
+        }
+        
     } catch (error) {
         console.error('Send message error:', error);
         alert('Error sending message');
@@ -689,9 +701,19 @@ async function sendMessage() {
 }
 
 function displayMessage(message) {
+    // Check if we've already displayed this message
+    const messageId = message.id || `${message.username}-${message.timestamp}`;
+    
+    if (state.displayedMessageIds.has(messageId)) {
+        return; // Skip duplicate
+    }
+    
+    state.displayedMessageIds.add(messageId);
+    
     const chatMessages = document.getElementById('chatMessages');
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message';
+    messageDiv.setAttribute('data-message-id', messageId);
     
     messageDiv.innerHTML = `
         <div class="message-user">${message.username}</div>
@@ -699,6 +721,7 @@ function displayMessage(message) {
     `;
     
     chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 function addSystemMessage(text) {
@@ -775,6 +798,11 @@ function startMessageSync() {
                     messages = await storage.getList(messagesKey, state.lastMessageCount, -1);
                     
                     messages.forEach(msg => {
+                        // Add ID to message if it doesn't have one
+                        if (!msg.id) {
+                            msg.id = `${msg.username}-${msg.timestamp}`;
+                        }
+                        
                         if (msg.username === 'System') {
                             addSystemMessage(msg.text);
                         } else {
@@ -783,9 +811,6 @@ function startMessageSync() {
                     });
                     
                     state.lastMessageCount = currentCount;
-                    
-                    const chatMessages = document.getElementById('chatMessages');
-                    chatMessages.scrollTop = chatMessages.scrollHeight;
                 }
             } else {
                 // For localStorage, check full array
@@ -796,6 +821,12 @@ function startMessageSync() {
                     // Display new messages
                     for (let i = state.lastMessageCount; i < currentCount; i++) {
                         const msg = messages[i];
+                        
+                        // Add ID to message if it doesn't have one
+                        if (!msg.id) {
+                            msg.id = `${msg.username}-${msg.timestamp}`;
+                        }
+                        
                         if (msg.username === 'System') {
                             addSystemMessage(msg.text);
                         } else {
@@ -804,9 +835,6 @@ function startMessageSync() {
                     }
                     
                     state.lastMessageCount = currentCount;
-                    
-                    const chatMessages = document.getElementById('chatMessages');
-                    chatMessages.scrollTop = chatMessages.scrollHeight;
                 }
             }
         } catch (error) {
@@ -815,4 +843,51 @@ function startMessageSync() {
     }, isUpstashConfigured ? 1000 : 1500); // Faster sync with Upstash
     
     console.log('Message sync started');
+}
+
+// Manual trigger for immediate sync (used after sending message)
+async function triggerMessageSync() {
+    if (!state.roomId) return;
+    
+    try {
+        const messagesKey = `messages:${state.roomId}`;
+        
+        if (isUpstashConfigured) {
+            const currentCount = await storage.getListLength(messagesKey);
+            if (currentCount > state.lastMessageCount) {
+                const messages = await storage.getList(messagesKey, state.lastMessageCount, -1);
+                messages.forEach(msg => {
+                    if (!msg.id) {
+                        msg.id = `${msg.username}-${msg.timestamp}`;
+                    }
+                    if (msg.username === 'System') {
+                        addSystemMessage(msg.text);
+                    } else {
+                        displayMessage(msg);
+                    }
+                });
+                state.lastMessageCount = currentCount;
+            }
+        } else {
+            const messages = await getFromStorage(messagesKey) || [];
+            const currentCount = messages.length;
+            
+            if (currentCount > state.lastMessageCount) {
+                for (let i = state.lastMessageCount; i < currentCount; i++) {
+                    const msg = messages[i];
+                    if (!msg.id) {
+                        msg.id = `${msg.username}-${msg.timestamp}`;
+                    }
+                    if (msg.username === 'System') {
+                        addSystemMessage(msg.text);
+                    } else {
+                        displayMessage(msg);
+                    }
+                }
+                state.lastMessageCount = currentCount;
+            }
+        }
+    } catch (error) {
+        console.error('Message sync error:', error);
+    }
 }
