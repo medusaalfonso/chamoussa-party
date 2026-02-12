@@ -60,21 +60,38 @@ A beautiful, real-time watch party platform where you can watch M3U8 streams tog
 - **HLS.js**: For M3U8 stream playback
 - **Vanilla JavaScript**: No framework dependencies
 - **CSS3**: Modern styling with gradients and animations
-- **Persistent Storage API**: For room state and chat synchronization
+- **Upstash Redis**: Optional serverless database for multi-device sync
+- **localStorage**: Fallback for same-browser sync
 
 ### How Synchronization Works
 
-- The host controls playback (play, pause, seek)
-- Room state is stored in shared storage
-- All viewers auto-sync every 3 seconds
-- Manual sync available via sync button
+**Default (localStorage):**
+- Room data stored in browser localStorage
+- Works perfectly for multiple tabs in the same browser
+- Ideal for screen sharing watch parties
 
-### Storage Structure
+**With Upstash (Recommended):**
+- Real-time sync across all devices
+- Works globally on any device
+- Free tier: 10,000 commands/day
+- Setup takes 5 minutes - see **UPSTASH_SETUP.md**
 
-```
-room:{roomId} - Room configuration and current state
-messages:{roomId} - Chat messages for the room
-```
+### Storage Options
+
+| Feature | localStorage | Upstash Redis |
+|---------|-------------|---------------|
+| Setup | None needed | 5 min setup |
+| Multi-device | ❌ Same browser only | ✅ All devices |
+| Free | ✅ Always | ✅ 10k/day |
+| Speed | Fast | Very Fast |
+| Best for | Testing, single browser | Production, real parties |
+
+**To enable multi-device support:**
+1. Create free Upstash account
+2. Add 2 lines of config to `app.js`
+3. Deploy - works everywhere!
+
+See **UPSTASH_SETUP.md** for complete instructions.
 
 ## 🎨 Customization
 

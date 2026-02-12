@@ -10,8 +10,159 @@ let state = {
     syncInterval: null,
     messageCheckInterval: null,
     viewers: 1,
-    lastSyncTime: 0
+    lastSyncTime: 0,
+    lastMessageCount: 0
 };
+
+// Upstash Redis Configuration
+// IMPORTANT: Replace these with your Upstash credentials from https://console.upstash.com
+const UPSTASH_CONFIG = {
+    url: 'YOUR_UPSTASH_REDIS_REST_URL', // e.g., https://your-db.upstash.io
+    token: 'YOUR_UPSTASH_REDIS_REST_TOKEN'
+};
+
+// Check if Upstash is configured
+const isUpstashConfigured = UPSTASH_CONFIG.url !== 'YOUR_UPSTASH_REDIS_REST_URL';
+
+// Upstash Redis Helper Functions
+const upstash = {
+    async request(command) {
+        if (!isUpstashConfigured) {
+            console.error('Upstash not configured! Please add your credentials to app.js');
+            return null;
+        }
+        
+        try {
+            const response = await fetch(`${UPSTASH_CONFIG.url}/${command.join('/')}`, {
+                headers: {
+                    'Authorization': `Bearer ${UPSTASH_CONFIG.token}`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            return data.result;
+        } catch (error) {
+            console.error('Upstash request error:', error);
+            return null;
+        }
+    },
+    
+    async set(key, value, expirySeconds = 86400) {
+        const stringValue = JSON.stringify(value);
+        return await this.request(['SET', key, stringValue, 'EX', expirySeconds]);
+    },
+    
+    async get(key) {
+        const result = await this.request(['GET', key]);
+        if (result) {
+            try {
+                return JSON.parse(result);
+            } catch {
+                return result;
+            }
+        }
+        return null;
+    },
+    
+    async push(key, value) {
+        const stringValue = JSON.stringify(value);
+        return await this.request(['RPUSH', key, stringValue]);
+    },
+    
+    async getList(key, start = 0, end = -1) {
+        const results = await this.request(['LRANGE', key, start, end]);
+        if (results && Array.isArray(results)) {
+            return results.map(item => {
+                try {
+                    return JSON.parse(item);
+                } catch {
+                    return item;
+                }
+            });
+        }
+        return [];
+    },
+    
+    async getListLength(key) {
+        return await this.request(['LLEN', key]) || 0;
+    }
+};
+
+// Fallback localStorage for when Upstash is not configured
+const localStorage_fallback = {
+    data: {},
+    
+    init() {
+        try {
+            const saved = localStorage.getItem('chamoussa_storage');
+            if (saved) this.data = JSON.parse(saved);
+        } catch (e) {
+            console.log('localStorage not available');
+        }
+    },
+    
+    async set(key, value) {
+        this.data[key] = value;
+        this.persist();
+        this.broadcast(key, value);
+        return true;
+    },
+    
+    async get(key) {
+        return this.data[key] || null;
+    },
+    
+    async push(key, value) {
+        if (!this.data[key]) this.data[key] = [];
+        this.data[key].push(value);
+        this.persist();
+        return true;
+    },
+    
+    async getList(key) {
+        return this.data[key] || [];
+    },
+    
+    async getListLength(key) {
+        return (this.data[key] || []).length;
+    },
+    
+    persist() {
+        try {
+            localStorage.setItem('chamoussa_storage', JSON.stringify(this.data));
+        } catch (e) {}
+    },
+    
+    broadcast(key, value) {
+        try {
+            localStorage.setItem('chamoussa_broadcast', JSON.stringify({
+                key, value, timestamp: Date.now()
+            }));
+        } catch (e) {}
+    },
+    
+    listen() {
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'chamoussa_broadcast') {
+                try {
+                    const { key, value } = JSON.parse(e.newValue);
+                    this.data[key] = value;
+                } catch (err) {}
+            } else if (e.key === 'chamoussa_storage') {
+                try {
+                    this.data = JSON.parse(e.newValue);
+                } catch (err) {}
+            }
+        });
+    }
+};
+
+// Use Upstash if configured, otherwise fallback to localStorage
+const storage = isUpstashConfigured ? upstash : localStorage_fallback;
 
 // Generate random room ID
 function generateRoomId() {
@@ -25,12 +176,12 @@ function generateUsername() {
     return `${adjectives[Math.floor(Math.random() * adjectives.length)]}${nouns[Math.floor(Math.random() * nouns.length)]}`;
 }
 
-// Storage helper using Claude's persistent storage
+// Storage helper
 async function saveToStorage(key, value) {
     try {
-        const result = await window.storage.set(key, JSON.stringify(value), true);
-        console.log('Saved to storage:', key, result ? 'success' : 'failed');
-        return result !== null;
+        await storage.set(key, value);
+        console.log('Saved to storage:', key);
+        return true;
     } catch (error) {
         console.error('Storage save error:', error);
         return false;
@@ -39,19 +190,26 @@ async function saveToStorage(key, value) {
 
 async function getFromStorage(key) {
     try {
-        const result = await window.storage.get(key, true);
-        if (result && result.value) {
-            return JSON.parse(result.value);
-        }
-        return null;
+        const result = await storage.get(key);
+        return result;
     } catch (error) {
-        console.log('Storage get error (key may not exist):', key);
+        console.log('Storage get error:', key);
         return null;
     }
 }
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // Show configuration warning if Upstash not configured
+    if (!isUpstashConfigured) {
+        console.warn('⚠️ Upstash Redis not configured! Using localStorage (same-browser only).');
+        console.warn('📖 For multi-device support, see UPSTASH_SETUP.md');
+        localStorage_fallback.init();
+        localStorage_fallback.listen();
+    } else {
+        console.log('✅ Upstash Redis configured - multi-device support enabled!');
+    }
+    
     state.username = generateUsername();
     setupEventListeners();
     loadRoomFromURL();
@@ -162,11 +320,20 @@ async function startParty() {
     console.log('Room created:', state.roomId, roomData);
     
     // Add initial welcome message
-    await saveToStorage(`messages:${state.roomId}`, [{
+    const welcomeMessage = {
         username: 'System',
         text: `${state.username} created the room`,
         timestamp: Date.now()
-    }]);
+    };
+    
+    const messagesKey = `messages:${state.roomId}`;
+    
+    if (isUpstashConfigured) {
+        await storage.push(messagesKey, welcomeMessage);
+        await storage.request(['EXPIRE', messagesKey, 86400]);
+    } else {
+        await saveToStorage(messagesKey, [welcomeMessage]);
+    }
     
     initializeRoom();
 }
@@ -206,13 +373,21 @@ async function joinRoom() {
     }
     
     // Add join message
-    const messages = await getFromStorage(`messages:${state.roomId}`) || [];
-    messages.push({
+    const joinMessage = {
         username: 'System',
         text: `${state.username} joined the room`,
         timestamp: Date.now()
-    });
-    await saveToStorage(`messages:${state.roomId}`, messages);
+    };
+    
+    const messagesKey = `messages:${state.roomId}`;
+    
+    if (isUpstashConfigured) {
+        await storage.push(messagesKey, joinMessage);
+    } else {
+        const messages = await getFromStorage(messagesKey) || [];
+        messages.push(joinMessage);
+        await saveToStorage(messagesKey, messages);
+    }
     
     console.log('Successfully joined room:', roomId);
     
@@ -255,7 +430,13 @@ function initializeRoom() {
 // Load existing messages when joining
 async function loadExistingMessages() {
     const messagesKey = `messages:${state.roomId}`;
-    const messages = await getFromStorage(messagesKey) || [];
+    
+    let messages;
+    if (isUpstashConfigured) {
+        messages = await storage.getList(messagesKey);
+    } else {
+        messages = await getFromStorage(messagesKey) || [];
+    }
     
     messages.forEach(msg => {
         if (msg.username === 'System') {
@@ -264,6 +445,9 @@ async function loadExistingMessages() {
             displayMessage(msg);
         }
     });
+    
+    // Track message count for sync
+    state.lastMessageCount = messages.length;
     
     const chatMessages = document.getElementById('chatMessages');
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -474,31 +658,30 @@ async function sendMessage() {
     };
     
     try {
-        // Save to storage
         const messagesKey = `messages:${state.roomId}`;
-        const messages = await getFromStorage(messagesKey) || [];
-        messages.push(chatMessage);
         
-        // Keep only last 100 messages
-        if (messages.length > 100) {
-            messages.shift();
-        }
-        
-        const saved = await saveToStorage(messagesKey, messages);
-        
-        if (saved) {
-            // Display message locally immediately
-            displayMessage(chatMessage);
-            
-            input.value = '';
-            
-            // Scroll to bottom
-            const chatMessages = document.getElementById('chatMessages');
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+        // Add message to storage
+        if (isUpstashConfigured) {
+            // Use Redis list for Upstash
+            await storage.push(messagesKey, chatMessage);
+            // Set expiry on the list (24 hours)
+            await storage.request(['EXPIRE', messagesKey, 86400]);
         } else {
-            console.error('Failed to save message');
-            alert('Failed to send message. Please try again.');
+            // Use array for localStorage
+            const messages = await getFromStorage(messagesKey) || [];
+            messages.push(chatMessage);
+            if (messages.length > 100) messages.shift();
+            await saveToStorage(messagesKey, messages);
         }
+        
+        // Display message locally immediately
+        displayMessage(chatMessage);
+        
+        input.value = '';
+        
+        // Scroll to bottom
+        const chatMessages = document.getElementById('chatMessages');
+        chatMessages.scrollTop = chatMessages.scrollHeight;
     } catch (error) {
         console.error('Send message error:', error);
         alert('Error sending message');
@@ -579,21 +762,57 @@ function startMessageSync() {
         
         try {
             const messagesKey = `messages:${state.roomId}`;
-            const messages = await getFromStorage(messagesKey) || [];
-            const chatMessages = document.getElementById('chatMessages');
-            const currentCount = chatMessages.querySelectorAll('.message').length;
             
-            if (messages.length > currentCount) {
-                // Display new messages
-                for (let i = currentCount; i < messages.length; i++) {
-                    displayMessage(messages[i]);
+            let messages;
+            let currentCount;
+            
+            if (isUpstashConfigured) {
+                // For Upstash, check list length first to avoid fetching all messages
+                currentCount = await storage.getListLength(messagesKey);
+                
+                if (currentCount > state.lastMessageCount) {
+                    // Only fetch new messages
+                    messages = await storage.getList(messagesKey, state.lastMessageCount, -1);
+                    
+                    messages.forEach(msg => {
+                        if (msg.username === 'System') {
+                            addSystemMessage(msg.text);
+                        } else {
+                            displayMessage(msg);
+                        }
+                    });
+                    
+                    state.lastMessageCount = currentCount;
+                    
+                    const chatMessages = document.getElementById('chatMessages');
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
                 }
-                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else {
+                // For localStorage, check full array
+                messages = await getFromStorage(messagesKey) || [];
+                currentCount = messages.length;
+                
+                if (currentCount > state.lastMessageCount) {
+                    // Display new messages
+                    for (let i = state.lastMessageCount; i < currentCount; i++) {
+                        const msg = messages[i];
+                        if (msg.username === 'System') {
+                            addSystemMessage(msg.text);
+                        } else {
+                            displayMessage(msg);
+                        }
+                    }
+                    
+                    state.lastMessageCount = currentCount;
+                    
+                    const chatMessages = document.getElementById('chatMessages');
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }
             }
         } catch (error) {
             console.error('Message sync error:', error);
         }
-    }, 1500);
+    }, isUpstashConfigured ? 1000 : 1500); // Faster sync with Upstash
     
     console.log('Message sync started');
 }
