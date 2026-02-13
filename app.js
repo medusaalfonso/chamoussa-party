@@ -18,8 +18,8 @@ let state = {
 // Upstash Redis Configuration
 // IMPORTANT: Replace these with your Upstash credentials from https://console.upstash.com
 const UPSTASH_CONFIG = {
-    url: 'https://one-feline-39646.upstash.io', // e.g., https://your-db.upstash.io
-    token: 'AZreAAIncDI2YTIyMjBmODllYzU0ZGE1ODZjMGMyZGFhNzQyYTBjMHAyMzk2NDY'
+    url: 'YOUR_UPSTASH_REDIS_REST_URL', // e.g., https://your-db.upstash.io
+    token: 'YOUR_UPSTASH_REDIS_REST_TOKEN'
 };
 
 // Check if Upstash is configured
@@ -295,11 +295,14 @@ async function startParty() {
         return;
     }
     
+    // Generate room ID and set state FIRST
     state.roomId = generateRoomId();
     state.videoUrl = m3u8Input;
     state.isHost = true;
     
-    // Save room data including subtitle content
+    console.log('Creating room:', state.roomId);
+    
+    // Create and save room data BEFORE initializing video
     const roomData = {
         videoUrl: state.videoUrl,
         subtitleData: state.subtitleData || null,
@@ -311,14 +314,17 @@ async function startParty() {
         viewers: [state.username]
     };
     
+    // CRITICAL: Save room data first
     const saved = await saveToStorage(`room:${state.roomId}`, roomData);
     
     if (!saved) {
-        alert('Error creating room. Please try again.');
+        alert('Error creating room. Please check your browser settings and try again.');
+        state.roomId = null;
+        state.isHost = false;
         return;
     }
     
-    console.log('Room created:', state.roomId, roomData);
+    console.log('Room saved successfully:', state.roomId);
     
     // Add initial welcome message
     const welcomeMessage = {
@@ -337,6 +343,9 @@ async function startParty() {
         await saveToStorage(messagesKey, [welcomeMessage]);
     }
     
+    console.log('Room fully initialized, now loading UI');
+    
+    // NOW initialize the UI and video player
     initializeRoom();
 }
 
@@ -349,16 +358,21 @@ async function joinRoom() {
         return;
     }
     
+    console.log('=== JOINING ROOM ===');
     console.log('Attempting to join room:', roomId);
+    console.log('Storage configured:', isUpstashConfigured ? 'Upstash' : 'localStorage');
     
     const roomData = await getFromStorage(`room:${roomId}`);
     
     console.log('Room data retrieved:', roomData);
     
     if (!roomData) {
-        alert('Room not found. Please check the room ID and try again.');
+        console.error('Room not found in storage');
+        alert('Room not found. Please check the room ID and try again.\n\nMake sure the host created the room first!');
         return;
     }
+    
+    console.log('Room found! Video URL:', roomData.videoUrl);
     
     state.roomId = roomId;
     state.videoUrl = roomData.videoUrl;
@@ -372,6 +386,7 @@ async function joinRoom() {
     if (!roomData.viewers.includes(state.username)) {
         roomData.viewers.push(state.username);
         await saveToStorage(`room:${roomId}`, roomData);
+        console.log('Added viewer to room:', state.username);
     }
     
     // Add join message
@@ -393,30 +408,30 @@ async function joinRoom() {
     }
     
     console.log('Successfully joined room:', roomId);
+    console.log('=== JOIN COMPLETE ===');
     
     initializeRoom();
 }
 
 // Initialize room
 function initializeRoom() {
-    // Update UI
+    console.log('Initializing room UI');
+    
+    // Update UI FIRST - before video loading
     document.getElementById('setupScreen').classList.add('hidden');
     document.getElementById('videoContainer').classList.remove('hidden');
     document.getElementById('chatSection').classList.remove('hidden');
     document.getElementById('roomId').textContent = `Room: ${state.roomId}`;
     
-    // Update URL
+    // Update URL so people can share/refresh
     window.history.pushState({}, '', `?room=${state.roomId}`);
-    
-    // Setup video
-    setupVideoPlayer();
     
     // Show subtitle button if subtitle data exists
     if (state.subtitleData) {
         document.getElementById('subtitleToggle').classList.remove('hidden');
     }
     
-    // Add system message
+    // Add system messages
     addSystemMessage(`Welcome to room ${state.roomId}!`);
     addSystemMessage(`You joined as ${state.username}`);
     
@@ -428,6 +443,13 @@ function initializeRoom() {
     startMessageSync();
     
     console.log('Room initialized:', state.roomId, 'isHost:', state.isHost);
+    
+    // Setup video player LAST - this way room exists even if video fails
+    // Use setTimeout to ensure it doesn't block
+    setTimeout(() => {
+        console.log('Now loading video player...');
+        setupVideoPlayer();
+    }, 100);
 }
 
 // Load existing messages when joining
@@ -465,10 +487,17 @@ async function loadExistingMessages() {
 function setupVideoPlayer() {
     const video = document.getElementById('videoPlayer');
     
+    console.log('Setting up video player with URL:', state.videoUrl);
+    
     if (Hls.isSupported()) {
         state.hls = new Hls({
             enableWorker: true,
-            lowLatencyMode: true
+            lowLatencyMode: true,
+            debug: false,
+            // Add error recovery options
+            maxLoadingDelay: 4,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 600,
         });
         
         state.hls.loadSource(state.videoUrl);
@@ -482,20 +511,68 @@ function setupVideoPlayer() {
         });
         
         state.hls.on(Hls.Events.ERROR, (event, data) => {
+            console.warn('HLS error:', data.type, data.details);
+            
             if (data.fatal) {
-                console.error('Fatal error:', data);
-                alert('Error loading stream. Please check the URL.');
+                console.error('Fatal HLS error:', data);
+                
+                // Show error but don't break the room
+                const errorMsg = getHLSErrorMessage(data);
+                addSystemMessage(`⚠️ Video error: ${errorMsg}`);
+                addSystemMessage('Room is still active - chat and sync still work!');
+                
+                // Try to recover
+                switch(data.type) {
+                    case Hls.ErrorTypes.NETWORK_ERROR:
+                        console.log('Network error - attempting recovery');
+                        state.hls.startLoad();
+                        break;
+                    case Hls.ErrorTypes.MEDIA_ERROR:
+                        console.log('Media error - attempting recovery');
+                        state.hls.recoverMediaError();
+                        break;
+                    default:
+                        console.log('Unrecoverable error');
+                        // Don't destroy HLS, keep room functional
+                        break;
+                }
             }
         });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS support (Safari)
         video.src = state.videoUrl;
-        if (state.subtitleData) {
-            addSubtitles();
-        }
+        
+        video.addEventListener('error', (e) => {
+            console.error('Video error:', e);
+            addSystemMessage('⚠️ Video loading error - check the M3U8 URL');
+            addSystemMessage('Room is still active - chat and sync still work!');
+        });
+        
+        video.addEventListener('loadedmetadata', () => {
+            console.log('Video loaded (native)');
+            if (state.subtitleData) {
+                addSubtitles();
+            }
+        });
     } else {
-        alert('HLS is not supported in your browser');
+        console.error('HLS not supported');
+        addSystemMessage('⚠️ HLS is not supported in your browser');
+        addSystemMessage('Try Chrome, Firefox, Safari, or Edge');
     }
+}
+
+// Get user-friendly error message
+function getHLSErrorMessage(data) {
+    if (data.details === 'manifestLoadError') {
+        return 'Cannot load stream - check URL or CORS settings';
+    } else if (data.details === 'manifestParsingError') {
+        return 'Invalid M3U8 format - check the stream URL';
+    } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        return 'Network error - check your connection';
+    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        return 'Media error - stream may be incompatible';
+    }
+    return 'Stream error - check the M3U8 URL';
 }
 
 // Add subtitles from uploaded file data
