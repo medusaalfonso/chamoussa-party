@@ -16,29 +16,46 @@ let state = {
 };
 
 // Upstash Redis Configuration
-// IMPORTANT: Replace these with your Upstash credentials from https://console.upstash.com
+// OPTION 1: Use Netlify Function (Recommended - No CORS issues!)
+// Set both to 'USE_NETLIFY_FUNCTION' and configure environment variables in Netlify
+// OPTION 2: Direct Connection - Replace with your actual Upstash credentials
 const UPSTASH_CONFIG = {
-    url: 'https://one-feline-39646.upstash.io', // e.g., https://your-db.upstash.io
-    token: 'AZreAAIncDI2YTIyMjBmODllYzU0ZGE1ODZjMGMyZGFhNzQyYTBjMHAyMzk2NDY'
+    url: 'YOUR_UPSTASH_REDIS_REST_URL', // Or 'USE_NETLIFY_FUNCTION'
+    token: 'YOUR_UPSTASH_REDIS_REST_TOKEN' // Or 'USE_NETLIFY_FUNCTION'
 };
 
 // Check if Upstash is configured
 const isUpstashConfigured = UPSTASH_CONFIG.url !== 'YOUR_UPSTASH_REDIS_REST_URL';
+const useNetlifyFunction = UPSTASH_CONFIG.url === 'USE_NETLIFY_FUNCTION';
 
 // Upstash Redis Helper Functions
 const upstash = {
     async request(command) {
         if (!isUpstashConfigured) {
-            console.error('Upstash not configured! Please add your credentials to app.js');
+            console.error('Upstash not configured! Please add your credentials to app.js or use Netlify Function');
             return null;
         }
         
         try {
-            const response = await fetch(`${UPSTASH_CONFIG.url}/${command.join('/')}`, {
-                headers: {
-                    'Authorization': `Bearer ${UPSTASH_CONFIG.token}`
-                }
-            });
+            let response;
+            
+            if (useNetlifyFunction) {
+                // Use Netlify Function (no CORS issues!)
+                response = await fetch('/.netlify/functions/redis', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ command })
+                });
+            } else {
+                // Direct connection to Upstash (may have CORS issues)
+                response = await fetch(`${UPSTASH_CONFIG.url}/${command.join('/')}`, {
+                    headers: {
+                        'Authorization': `Bearer ${UPSTASH_CONFIG.token}`
+                    }
+                });
+            }
             
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -48,6 +65,13 @@ const upstash = {
             return data.result;
         } catch (error) {
             console.error('Upstash request error:', error);
+            
+            // Check if it's a CORS error
+            if (!useNetlifyFunction && (error.message.includes('Failed to fetch') || error.name === 'TypeError')) {
+                console.error('❌ CORS ERROR: Switch to Netlify Function method!');
+                console.error('📖 See NETLIFY_FUNCTION_SETUP.md for instructions');
+            }
+            
             return null;
         }
     },
@@ -204,11 +228,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Show configuration warning if Upstash not configured
     if (!isUpstashConfigured) {
         console.warn('⚠️ Upstash Redis not configured! Using localStorage (same-browser only).');
-        console.warn('📖 For multi-device support, see UPSTASH_SETUP.md');
+        console.warn('📖 For multi-device support, see UPSTASH_SETUP.md or NETLIFY_FUNCTION_SETUP.md');
         localStorage_fallback.init();
         localStorage_fallback.listen();
+    } else if (useNetlifyFunction) {
+        console.log('✅ Using Netlify Function for Upstash - multi-device support enabled!');
+        console.log('📡 Requests routed through /.netlify/functions/redis (no CORS issues)');
     } else {
-        console.log('✅ Upstash Redis configured - multi-device support enabled!');
+        console.log('✅ Upstash Redis configured (direct connection) - multi-device support enabled!');
+        console.log('⚠️ If you get CORS errors, switch to Netlify Function method');
     }
     
     state.username = generateUsername();
@@ -318,7 +346,29 @@ async function startParty() {
     const saved = await saveToStorage(`room:${state.roomId}`, roomData);
     
     if (!saved) {
-        alert('Error creating room. Please check your browser settings and try again.');
+        console.error('Failed to save room data');
+        
+        if (isUpstashConfigured) {
+            if (useNetlifyFunction) {
+                alert('❌ Error creating room!\n\n' +
+                      'Check Netlify Function configuration:\n\n' +
+                      '1. Environment variables set in Netlify?\n' +
+                      '   - UPSTASH_REDIS_REST_URL\n' +
+                      '   - UPSTASH_REDIS_REST_TOKEN\n\n' +
+                      '2. Redeployed after adding variables?\n\n' +
+                      'Check browser console (F12) for details.');
+            } else {
+                alert('❌ Error creating room!\n\n' +
+                      'CORS may be blocking requests.\n\n' +
+                      'Recommended fix:\n' +
+                      'Switch to Netlify Function method\n' +
+                      'See NETLIFY_FUNCTION_SETUP.md\n\n' +
+                      'Check browser console (F12) for details.');
+            }
+        } else {
+            alert('Error creating room. Please check your browser settings and try again.');
+        }
+        
         state.roomId = null;
         state.isHost = false;
         return;

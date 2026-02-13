@@ -28,13 +28,41 @@ This guide shows you how to enable true multi-device synchronization using Upsta
 5. **TLS**: Enabled (default)
 6. Click "Create"
 
-### 3. Get Your Credentials
+### 3. Get Your Credentials & Enable CORS
 
-1. Click on your database
-2. Scroll to "REST API" section
-3. Copy these values:
-   - `UPSTASH_REDIS_REST_URL`
-   - `UPSTASH_REDIS_REST_TOKEN`
+1. Click on your database name to open it
+2. You'll see the database details page
+3. Look for the **"REST API"** tab or section (may be under "Connect" or similar)
+4. Copy these two values:
+   - **UPSTASH_REDIS_REST_URL** (the endpoint URL)
+   - **UPSTASH_REDIS_REST_TOKEN** (the token)
+
+### 3.5. Enable CORS (CRITICAL!)
+
+**The CORS setting location depends on your Upstash UI version:**
+
+**Option A - If you see it in database settings:**
+1. In your database page, look for **"Settings"** or **"Advanced"** tab
+2. Find **"CORS"** or **"Allow CORS"** option
+3. Enable it
+
+**Option B - If CORS is in REST API section:**
+1. Go to the **"REST API"** or **"Connect"** tab
+2. Look for **"Enable CORS"** toggle or checkbox
+3. Turn it ON
+
+**Option C - If you can't find CORS toggle:**
+CORS may be enabled by default in newer Upstash databases! Try the integration first, and only if you get CORS errors, contact Upstash support or check their documentation.
+
+**To verify CORS is enabled:**
+- After entering your credentials in app.js and deploying, check the browser console
+- If you see CORS errors, CORS needs to be enabled
+- If rooms work, CORS is already enabled!
+
+Without CORS enabled, you'll get errors like:
+```
+Access to fetch... has been blocked by CORS policy
+```
 
 ### 4. Update Your Code
 
@@ -342,6 +370,76 @@ If you outgrow the free tier:
 | Pricing | $0.20/100k | $5/GB |
 
 ## Troubleshooting
+
+### CORS Errors
+
+If you see CORS errors in the browser console:
+
+```
+Access to fetch at 'https://....upstash.io/...' has been blocked by CORS policy
+```
+
+**Solutions (try in order):**
+
+1. **Check Upstash UI for CORS setting:**
+   - Database page → Settings/Advanced → Look for CORS option
+   - Or in Connect/REST API section
+   - Enable if you find it
+
+2. **Create a Netlify Function (Recommended workaround):**
+   
+   This bypasses CORS by proxying requests through your server.
+   
+   Create `netlify/functions/redis.js`:
+   ```javascript
+   exports.handler = async (event) => {
+       const { command } = JSON.parse(event.body);
+       
+       const url = `${process.env.UPSTASH_REDIS_REST_URL}/${command.join('/')}`;
+       
+       const response = await fetch(url, {
+           headers: {
+               'Authorization': `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}`
+           }
+       });
+       
+       const data = await response.json();
+       
+       return {
+           statusCode: 200,
+           headers: {
+               'Access-Control-Allow-Origin': '*'
+           },
+           body: JSON.stringify(data)
+       };
+   };
+   ```
+   
+   Then update `app.js`, change the `request` function:
+   ```javascript
+   async request(command) {
+       const response = await fetch('/.netlify/functions/redis', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ command })
+       });
+       const data = await response.json();
+       return data.result;
+   }
+   ```
+   
+   Add environment variables in Netlify:
+   - Go to Site settings → Environment variables
+   - Add `UPSTASH_REDIS_REST_URL`
+   - Add `UPSTASH_REDIS_REST_TOKEN`
+
+3. **Contact Upstash Support:**
+   - Some accounts may have CORS disabled by default
+   - Ask them to enable CORS for your database
+
+4. **Use a different region:**
+   - Try creating a new database in a different region
+   - Some regions may have different CORS policies
 
 ### CORS Errors
 
