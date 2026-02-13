@@ -18,8 +18,8 @@ let state = {
 // Upstash Redis Configuration
 // IMPORTANT: Replace these with your Upstash credentials from https://console.upstash.com
 const UPSTASH_CONFIG = {
-    url: 'YOUR_UPSTASH_REDIS_REST_URL', // e.g., https://your-db.upstash.io
-    token: 'YOUR_UPSTASH_REDIS_REST_TOKEN'
+    url: 'https://one-feline-39646.upstash.io', // e.g., https://your-db.upstash.io
+    token: 'AZreAAIncDI2YTIyMjBmODllYzU0ZGE1ODZjMGMyZGFhNzQyYTBjMHAyMzk2NDY'
 };
 
 // Check if Upstash is configured
