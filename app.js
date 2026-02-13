@@ -20,8 +20,8 @@ let state = {
 // Set both to 'USE_NETLIFY_FUNCTION' and configure environment variables in Netlify
 // OPTION 2: Direct Connection - Replace with your actual Upstash credentials
 const UPSTASH_CONFIG = {
-    url: 'YOUR_UPSTASH_REDIS_REST_URL', // Or 'USE_NETLIFY_FUNCTION'
-    token: 'YOUR_UPSTASH_REDIS_REST_TOKEN' // Or 'USE_NETLIFY_FUNCTION'
+    url: 'USE_NETLIFY_FUNCTION',
+    token: 'USE_NETLIFY_FUNCTION'
 };
 
 // Check if Upstash is configured
